@@ -3,20 +3,29 @@ from typing import Annotated
 
 from fastapi import Depends, HTTPException
 from graphiti_core import Graphiti  # type: ignore
+from graphiti_core.embedder import EmbedderClient, OpenAIEmbedder, OpenAIEmbedderConfig
 from graphiti_core.edges import EntityEdge  # type: ignore
 from graphiti_core.errors import EdgeNotFoundError, GroupsEdgesNotFoundError, NodeNotFoundError
-from graphiti_core.llm_client import LLMClient  # type: ignore
+from graphiti_core.llm_client import LLMClient, LLMConfig, OpenAIClient  # type: ignore
 from graphiti_core.nodes import EntityNode, EpisodicNode  # type: ignore
 
 from graph_service.config import ZepEnvDep
 from graph_service.dto import FactResult
+from graph_service.runtime_config import resolve_graphiti_client_settings
 
 logger = logging.getLogger(__name__)
 
 
 class ZepGraphiti(Graphiti):
-    def __init__(self, uri: str, user: str, password: str, llm_client: LLMClient | None = None):
-        super().__init__(uri, user, password, llm_client)
+    def __init__(
+        self,
+        uri: str,
+        user: str,
+        password: str,
+        llm_client: LLMClient | None = None,
+        embedder: EmbedderClient | None = None,
+    ):
+        super().__init__(uri, user, password, llm_client=llm_client, embedder=embedder)
 
     async def save_entity_node(self, name: str, uuid: str, group_id: str, summary: str = ''):
         new_node = EntityNode(
@@ -71,18 +80,33 @@ class ZepGraphiti(Graphiti):
             raise HTTPException(status_code=404, detail=e.message) from e
 
 
-async def get_graphiti(settings: ZepEnvDep):
-    client = ZepGraphiti(
+def _build_graphiti_client(settings: ZepEnvDep) -> ZepGraphiti:
+    runtime_config = resolve_graphiti_client_settings(settings)
+    embedder_config_kwargs: dict[str, str] = {
+        'api_key': runtime_config.embedding.api_key,
+    }
+    if runtime_config.embedding.base_url is not None:
+        embedder_config_kwargs['base_url'] = runtime_config.embedding.base_url
+    if runtime_config.embedding.model_name is not None:
+        embedder_config_kwargs['embedding_model'] = runtime_config.embedding.model_name
+
+    return ZepGraphiti(
         uri=settings.neo4j_uri,
         user=settings.neo4j_user,
         password=settings.neo4j_password,
+        llm_client=OpenAIClient(
+            config=LLMConfig(
+                api_key=runtime_config.llm.api_key,
+                base_url=runtime_config.llm.base_url,
+                model=runtime_config.llm.model_name,
+            )
+        ),
+        embedder=OpenAIEmbedder(config=OpenAIEmbedderConfig(**embedder_config_kwargs)),
     )
-    if settings.openai_base_url is not None:
-        client.llm_client.config.base_url = settings.openai_base_url
-    if settings.openai_api_key is not None:
-        client.llm_client.config.api_key = settings.openai_api_key
-    if settings.model_name is not None:
-        client.llm_client.model = settings.model_name
+
+
+async def get_graphiti(settings: ZepEnvDep):
+    client = _build_graphiti_client(settings)
 
     try:
         yield client
@@ -91,11 +115,7 @@ async def get_graphiti(settings: ZepEnvDep):
 
 
 async def initialize_graphiti(settings: ZepEnvDep):
-    client = ZepGraphiti(
-        uri=settings.neo4j_uri,
-        user=settings.neo4j_user,
-        password=settings.neo4j_password,
-    )
+    client = _build_graphiti_client(settings)
     await client.build_indices_and_constraints()
 
 
