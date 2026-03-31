@@ -10,9 +10,14 @@ class Settings(BaseSettings):
     openai_api_key: str
     openai_base_url: str | None = Field(None)
     model_name: str | None = Field(None)
+    embedding_provider: str = Field('local')
     embedding_api_key: str | None = Field(None)
     embedding_base_url: str | None = Field(None)
-    embedding_model_name: str | None = Field(None)
+    embedding_model_name: str | None = Field('BAAI/bge-m3')
+    reranker_provider: str = Field('local')
+    reranker_api_key: str | None = Field(None)
+    reranker_base_url: str | None = Field(None)
+    reranker_model_name: str | None = Field('BAAI/bge-reranker-v2-m3')
     neo4j_uri: str
     neo4j_user: str
     neo4j_password: str

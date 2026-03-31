@@ -39,25 +39,28 @@ RUN groupadd -r app && useradd -r -d /app -g app app
 WORKDIR /app
 COPY ./server/pyproject.toml ./server/README.md ./server/uv.lock ./
 COPY ./server/graph_service ./graph_service
+COPY ./pyproject.toml ./README.md /tmp/graphiti/
+COPY ./graphiti_core /tmp/graphiti/graphiti_core
 
 # Install server dependencies (without graphiti-core from lockfile)
-# Then install graphiti-core from PyPI at the desired version
-# This prevents the stale lockfile from pinning an old graphiti-core version
+# Then install the local graphiti-core source plus local-model dependencies
 ARG INSTALL_FALKORDB=false
+ARG TORCH_CPU_VERSION=2.11.0+cpu
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev && \
-    if [ -n "$GRAPHITI_VERSION" ]; then \
-        if [ "$INSTALL_FALKORDB" = "true" ]; then \
-            uv pip install --system --upgrade "graphiti-core[falkordb]==$GRAPHITI_VERSION"; \
-        else \
-            uv pip install --system --upgrade "graphiti-core==$GRAPHITI_VERSION"; \
-        fi; \
+    if [ "$INSTALL_FALKORDB" = "true" ]; then \
+        uv pip install --system --upgrade \
+            --index-url https://download.pytorch.org/whl/cpu \
+            --extra-index-url https://pypi.org/simple \
+            --index-strategy unsafe-best-match \
+            "torch==$TORCH_CPU_VERSION" sentence-transformers \
+            "falkordb>=1.1.2,<2.0.0" /tmp/graphiti; \
     else \
-        if [ "$INSTALL_FALKORDB" = "true" ]; then \
-            uv pip install --system --upgrade "graphiti-core[falkordb]"; \
-        else \
-            uv pip install --system --upgrade graphiti-core; \
-        fi; \
+        uv pip install --system --upgrade \
+            --index-url https://download.pytorch.org/whl/cpu \
+            --extra-index-url https://pypi.org/simple \
+            --index-strategy unsafe-best-match \
+            "torch==$TORCH_CPU_VERSION" sentence-transformers /tmp/graphiti; \
     fi
 
 # Change ownership to app user

@@ -30,10 +30,13 @@ else:
 
 from graphiti_core.cross_encoder.client import CrossEncoderClient
 
+DEFAULT_RERANKER_MODEL = 'BAAI/bge-reranker-v2-m3'
+
 
 class BGERerankerClient(CrossEncoderClient):
-    def __init__(self):
-        self.model = CrossEncoder('BAAI/bge-reranker-v2-m3')
+    def __init__(self, model_name: str = DEFAULT_RERANKER_MODEL):
+        self.model_name = model_name
+        self.model = CrossEncoder(model_name)
 
     async def rank(self, query: str, passages: list[str]) -> list[tuple[str, float]]:
         if not passages:

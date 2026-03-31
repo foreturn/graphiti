@@ -3,15 +3,26 @@ from typing import Annotated
 
 from fastapi import Depends, HTTPException
 from graphiti_core import Graphiti  # type: ignore
+from graphiti_core.cross_encoder import CrossEncoderClient  # type: ignore
+from graphiti_core.cross_encoder.bge_reranker_client import BGERerankerClient
+from graphiti_core.cross_encoder.openai_reranker_client import OpenAIRerankerClient
 from graphiti_core.embedder import EmbedderClient, OpenAIEmbedder, OpenAIEmbedderConfig
+from graphiti_core.embedder.sentence_transformer import (
+    SentenceTransformerEmbedder,
+    SentenceTransformerEmbedderConfig,
+)
 from graphiti_core.edges import EntityEdge  # type: ignore
 from graphiti_core.errors import EdgeNotFoundError, GroupsEdgesNotFoundError, NodeNotFoundError
-from graphiti_core.llm_client import LLMClient, LLMConfig, OpenAIClient  # type: ignore
+from graphiti_core.llm_client import LLMClient, LLMConfig  # type: ignore
+from graphiti_core.llm_client.openai_generic_client import OpenAIGenericClient
 from graphiti_core.nodes import EntityNode, EpisodicNode  # type: ignore
 
 from graph_service.config import ZepEnvDep
 from graph_service.dto import FactResult
-from graph_service.runtime_config import resolve_graphiti_client_settings
+from graph_service.runtime_config import (
+    DEFAULT_LOCAL_RERANKER_MODEL,
+    resolve_graphiti_client_settings,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -24,8 +35,16 @@ class ZepGraphiti(Graphiti):
         password: str,
         llm_client: LLMClient | None = None,
         embedder: EmbedderClient | None = None,
+        cross_encoder: CrossEncoderClient | None = None,
     ):
-        super().__init__(uri, user, password, llm_client=llm_client, embedder=embedder)
+        super().__init__(
+            uri,
+            user,
+            password,
+            llm_client=llm_client,
+            embedder=embedder,
+            cross_encoder=cross_encoder,
+        )
 
     async def save_entity_node(self, name: str, uuid: str, group_id: str, summary: str = ''):
         new_node = EntityNode(
@@ -82,26 +101,48 @@ class ZepGraphiti(Graphiti):
 
 def _build_graphiti_client(settings: ZepEnvDep) -> ZepGraphiti:
     runtime_config = resolve_graphiti_client_settings(settings)
-    embedder_config_kwargs: dict[str, str] = {
-        'api_key': runtime_config.embedding.api_key,
-    }
-    if runtime_config.embedding.base_url is not None:
-        embedder_config_kwargs['base_url'] = runtime_config.embedding.base_url
-    if runtime_config.embedding.model_name is not None:
-        embedder_config_kwargs['embedding_model'] = runtime_config.embedding.model_name
+    llm_config = LLMConfig(
+        api_key=runtime_config.llm.api_key,
+        base_url=runtime_config.llm.base_url,
+        model=runtime_config.llm.model_name,
+    )
+
+    if runtime_config.embedding.provider == 'local':
+        embedder: EmbedderClient = SentenceTransformerEmbedder(
+            config=SentenceTransformerEmbedderConfig(
+                embedding_model=runtime_config.embedding.model_name
+                or SentenceTransformerEmbedderConfig().embedding_model
+            )
+        )
+    else:
+        embedder_config_kwargs: dict[str, str] = {
+            'api_key': runtime_config.embedding.api_key or '',
+        }
+        if runtime_config.embedding.base_url is not None:
+            embedder_config_kwargs['base_url'] = runtime_config.embedding.base_url
+        if runtime_config.embedding.model_name is not None:
+            embedder_config_kwargs['embedding_model'] = runtime_config.embedding.model_name
+        embedder = OpenAIEmbedder(config=OpenAIEmbedderConfig(**embedder_config_kwargs))
+
+    if runtime_config.reranker.provider == 'local':
+        cross_encoder: CrossEncoderClient = BGERerankerClient(
+            model_name=runtime_config.reranker.model_name or DEFAULT_LOCAL_RERANKER_MODEL
+        )
+    else:
+        reranker_config = LLMConfig(
+            api_key=runtime_config.reranker.api_key,
+            base_url=runtime_config.reranker.base_url,
+            model=runtime_config.reranker.model_name,
+        )
+        cross_encoder = OpenAIRerankerClient(config=reranker_config)
 
     return ZepGraphiti(
         uri=settings.neo4j_uri,
         user=settings.neo4j_user,
         password=settings.neo4j_password,
-        llm_client=OpenAIClient(
-            config=LLMConfig(
-                api_key=runtime_config.llm.api_key,
-                base_url=runtime_config.llm.base_url,
-                model=runtime_config.llm.model_name,
-            )
-        ),
-        embedder=OpenAIEmbedder(config=OpenAIEmbedderConfig(**embedder_config_kwargs)),
+        llm_client=OpenAIGenericClient(config=llm_config),
+        embedder=embedder,
+        cross_encoder=cross_encoder,
     )
 
 
